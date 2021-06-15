@@ -694,7 +694,7 @@ class SE2(SO2):
 
 
 @export
-class SE2_SZ_implementation(LieGroup):
+class SE2_canonical(LieGroup):
     lie_dim = 3
     rep_dim = 3
     q_dim = 0
