@@ -174,7 +174,7 @@ class RotMNIST(EasyIMGDataset,torchvision.datasets.MNIST):
 
 from PIL import Image
 from torchvision.datasets.utils import download_url, download_and_extract_archive, extract_archive, \
-    makedir_exist_ok, verify_str_arg
+    verify_str_arg # makedir_exist_ok
 from torchvision.datasets.vision import VisionDataset
 # !wget -nc http://www.iro.umontreal.ca/~lisa/icml2007data/mnist_rotation_new.zip
 # # uncompress the zip file
@@ -250,7 +250,7 @@ class MnistRotDataset(VisionDataset,metaclass=Named):
     def default_aug_layers(self):
         return RandomRotateTranslate(0)# no translation
 
-
+@export
 class DynamicsDataset(Dataset, metaclass=Named):
     num_targets = 1
 
@@ -328,6 +328,8 @@ class DynamicsDataset(Dataset, metaclass=Named):
         chosen_ts: torch.Tensor, [batch_size, chunk_len]
         chosen_zs: torch.Tensor, [batch_size, chunk_len, z_dim]
         """
+        torch.manual_seed(0)
+        
         batch_size, traj_len, z_dim = zs.shape
         n_chunks = traj_len // chunk_len
         chunk_idx = torch.randint(0, n_chunks, (batch_size,), device=zs.device).long()
@@ -366,31 +368,50 @@ class SpringDynamics(DynamicsDataset):
     sys_dim = 2
     
     def __init__(self, root_dir=default_root_dir, train=True, download=True, n_systems=100, space_dim=2, regen=False,
-                 chunk_len=5):
+                 chunk_len=5, num_particles=6, dataset=None, load_preprocessed=False, save_after_processing=False):
         super().__init__()
-        filename = os.path.join(root_dir, f"spring_{space_dim}D_{n_systems}_{('train' if train else 'test')}.pz")
-        self.space_dim = space_dim
-        if os.path.exists(filename) and not regen:
-            ts, zs,self.SysP = torch.load(filename)
-        elif download:
-            sim_kwargs = dict(
-                traj_len=500,
-                delta_t=0.01,
-            )
-            ts, zs, self.SysP = self.generate_trajectory_data(n_systems=n_systems, sim_kwargs=sim_kwargs)
-            os.makedirs(root_dir, exist_ok=True)
-            print(filename)
-            torch.save((ts, zs, self.SysP),filename)
+        self.num_particles = num_particles
+        if num_particles == 6 and space_dim == 2 and n_systems == 10000: # TODO: fix this later
+            filename = os.path.join(root_dir, f"spring_{space_dim}D_{n_systems}_{('train' if train else 'test')}.pz") # use the old file.
         else:
-            raise Exception("Download=False and data not there")
-        self.sys_dim = self.SysP.shape[-1]
-        self.Ts, self.Zs = self.format_training_data(ts, zs, chunk_len)
-    
+            filename = os.path.join(root_dir, f"spring_{space_dim}D_{n_systems}_particles_{num_particles}_{('train' if train else 'test')}.pz")
+        self.space_dim = space_dim
+        if not load_preprocessed:
+            if os.path.exists(filename) and not regen:
+                if dataset is not None:
+                    ts, zs,self.SysP = dataset 
+                else:
+                    ts, zs,self.SysP = torch.load(filename)
+            elif download:
+                sim_kwargs = dict(
+                    traj_len=500,
+                    delta_t=0.01,
+                )
+                ts, zs, self.SysP = self.generate_trajectory_data(n_systems=n_systems, sim_kwargs=sim_kwargs)
+                os.makedirs(root_dir, exist_ok=True)
+                print(filename)
+                torch.save((ts, zs, self.SysP),filename)
+            else:
+                raise Exception("Download=False and data not there")
+            self.sys_dim = self.SysP.shape[-1]
+            self.Ts, self.Zs = self.format_training_data(ts, zs, chunk_len)
+            if save_after_processing:
+                assert filename.endswith(".pz")
+                filename_processed = filename[:-3] + f"_chunklen_{chunk_len}.pz"
+                torch.save((self.Ts, self.Zs, self.SysP), filename_processed)
+        else:
+            assert filename.endswith(".pz")
+            filename_processed = filename[:-3] + f"_chunklen_{chunk_len}.pz"
+            self.Ts, self.Zs, self.SysP = torch.load(filename_processed)
+            self.sys_dim = self.SysP.shape[-1]
+
+
+
     def sample_system(self, n_systems, space_dim, ood=False):
         """
         See DynamicsDataset.sample_system docstring
         """
-        n = np.random.choice([6]) #TODO: handle padding/batching with different n
+        n = np.random.choice([self.num_particles]) #TODO: handle padding/batching with different n
         if ood: n = np.random.choice([4,8])
         masses = (3 * torch.rand(n_systems, n).double() + .1)
         k = 5*torch.rand(n_systems, n).double()
@@ -404,14 +425,21 @@ class SpringDynamics(DynamicsDataset):
         H = lambda t, z: SpringH(z, *sys_params)
         return HamiltonianDynamics(H, wgrad=False)
 
+    def tensors_to(self, device):
+        self.Ts = self.Ts.to(device)
+        self.Zs = self.Zs.to(device)
+        self.SysP = self.SysP.to(device)
+
+
 @export
 class NBodyDynamics(DynamicsDataset):
     default_root_dir = os.path.expanduser('~/datasets/ODEDynamics/NBodyDynamics/')
 
     def __init__(self, root_dir=default_root_dir, train=True, download=True, n_systems=100, regen=False,
-                 chunk_len=5, space_dim=3, delta_t=0.01):
+                 chunk_len=5, space_dim=3, delta_t=0.01, num_particles=6):
         super().__init__()
-        filename = os.path.join(root_dir, f"n_body_{space_dim}D_{n_systems}_{('train' if train else 'test')}.pz")
+        self.num_particles = num_particles
+        filename = os.path.join(root_dir, f"spring_{space_dim}D_{n_systems}_particles_{num_particles}_{('train' if train else 'test')}.pz")
         self.space_dim = space_dim
 
         if os.path.exists(filename) and not regen:
@@ -430,10 +458,11 @@ class NBodyDynamics(DynamicsDataset):
         self.sys_dim = self.SysP.shape[-1]
         self.Ts, self.Zs = self.format_training_data(ts, zs, chunk_len)
 
-    def sample_system(self, n_systems, n_bodies=6, space_dim=3):
+    def sample_system(self, n_systems, space_dim=3): # removed kwarg: n_bodies=6 
         """
         See DynamicsDataset.sample_system docstring
         """
+        n_bodies = self.num_particles
         grav_const = 1.  # hamiltonian.py assumes G = 1
         star_mass = torch.tensor([[32.]]).expand(n_systems, -1, -1)
         star_pos = torch.tensor([[0.] * space_dim]).expand(n_systems, -1, -1)
