@@ -13,9 +13,12 @@ class LieGroup(object,metaclass=Named):
     lie_dim = NotImplemented # dimension of the lie algebra of G. (e.g. 1 for SO(2))
     q_dim = NotImplemented # dimension which the quotient space X/G is embedded. (e.g. 1 for SO(2) acting on R2)
     
-    def __init__(self,alpha=.2):
+    def __init__(self,alpha=.2, debug_config=None, nsamples=None):
         super().__init__()
         self.alpha=alpha
+
+        self.debug_config = {"ensure_thetas_in_range": True, "add_random_offsets": True, "tol": 7e-3} if debug_config is None else debug_config # added this 7e-3 which was the default sitting here before but need 7e-8 for diagnostics in double precision?
+        self.nsamples = nsamples
 
     def exp(self,a):
         """ Computes (matrix) exponential Lie algebra elements (in a given basis).
@@ -228,7 +231,16 @@ class SO2(LieGroup):
         R[...,1,0] = sin
         return R
     def log(self,R):
-        return torch.atan2(R[...,1,0]-R[...,0,1],R[...,0,0]+R[...,1,1])[...,None]
+        theta = torch.atan2(R[...,1,0]-R[...,0,1],R[...,0,0]+R[...,1,1])[...,None]
+
+        if self.debug_config['ensure_thetas_in_range']:
+            tol = self.debug_config['tol']
+            theta = torch.where(torch.abs(theta + np.pi) < tol, theta + 2*np.pi, theta)            
+
+            assert ((-np.pi + tol < theta)).all(), f'Thetas are not in (-pi, pi]. Error at lower bound: Min is {theta.min()}. Max is {theta.max()}.'
+            assert ((theta <= np.pi + tol)).all(), f'Thetas are not in (-pi, pi]. Error at upper bound: Min is {theta.min()}. Max is {theta.max()}.'
+
+        return theta
     def components2matrix(self,a): # a: (*,lie_dim)
         A = torch.zeros(*a.shape[:-1],2,2,device=a.device,dtype=a.dtype)
         A[...,0,1] = -a[...,0]
@@ -372,11 +384,12 @@ class SE2(SO2):
         # Sample stabilizer of the origin
         #thetas = (torch.rand(*p.shape[:-1],1).to(p.device)*2-1)*np.pi
         #thetas = torch.randn(nsamples)*2*np.pi - np.pi
-        thetas = torch.linspace(-np.pi,np.pi,nsamples+1)[1:].to(pt.device)
+        thetas = torch.linspace(-np.pi,np.pi,nsamples+1, device=pt.device, dtype=pt.dtype)[1:]#.to(pt.device)
         for _ in pt.shape[:-1]: # uniform on circle, but -pi and pi ar the same
             thetas=thetas.unsqueeze(0)
-        thetas = thetas + torch.rand(*pt.shape[:-1],1).to(pt.device)*2*np.pi
-        R = torch.zeros(*pt.shape[:-1],nsamples,d,d).to(pt.device)
+        if self.debug_config['add_random_offsets']:
+            thetas = thetas + torch.rand(*pt.shape[:-1],1, device=pt.device, dtype=pt.dtype)*2*np.pi#.to(pt.device)
+        R = torch.zeros(*pt.shape[:-1],nsamples,d,d, device=pt.device, dtype=pt.dtype)#.to(pt.device)
         sin,cos = thetas.sin(),thetas.cos()
         R[...,0,0] = cos
         R[...,1,1] = cos
@@ -395,6 +408,50 @@ class SE2(SO2):
         d_theta = abq_pairs[...,0].abs()
         d_r = norm(abq_pairs[...,1:],dim=-1)
         return d_theta*self.alpha + (1-self.alpha)*d_r
+
+
+@export
+class SE2_SZ_implementation(LieGroup):
+    lie_dim = 3
+    rep_dim = 3
+    q_dim = 0
+
+    def matrixify(self, X, nsamples):
+        angles = 2*np.pi * X[..., [2]] / nsamples
+        cosines = torch.cos(angles)
+        sines = torch.sin(angles)
+
+        rotations_1 = torch.cat([cosines, -sines], dim=2).unsqueeze(2)
+        rotations_2 = torch.cat([sines, cosines], dim=2).unsqueeze(2)
+        rotations = torch.cat([rotations_1, rotations_2], dim=2)
+
+        X_lift = torch.cat(
+            [rotations, X[..., :2].unsqueeze(3)], dim=3)
+        X_lift = torch.cat(
+            [X_lift, torch.ones_like(X_lift)[:, :, :1, :]], dim=2)
+        X_lift[:, :, [2], :2] = 0.
+
+        return X_lift, rotations
+
+    def lift(self,x,nsamples,**kwargs):
+        """assumes p has shape (*,n,2), vals has shape (*,n,c), mask has shape (*,n)
+            returns (a,v) with shapes [(*,n*nsamples,lie_dim),(*,n*nsamples,c)"""
+        p,v,m = x
+        rotations = torch.arange(nsamples, dtype=p.dtype, device=p.device).repeat((*p.shape[:2]))
+        rotations = rotations.unsqueeze(-1)
+        p_lift = p[...,None,:].repeat((1,)*len(p.shape[:-1])+(nsamples,1))
+        p_lift = p_lift.reshape(p.shape[0], p.shape[1] * nsamples, p.shape[2])
+        X_lift = torch.cat([p_lift, rotations], dim=-1)
+        X_pairs = X_lift[..., None, :, :] - X_lift[..., :, None, :]
+        _, rotations_inverse = self.matrixify(-X_lift, nsamples)
+        rotations_inverse = rotations_inverse.unsqueeze(2).repeat(1, 1, rotations_inverse.shape[1], 1, 1)
+        X_pairs = torch.cat([(rotations_inverse@(X_pairs[..., :2, None])).squeeze(-1), torch.remainder(X_pairs[..., [-1]], nsamples)], dim=-1)
+
+        expanded_v = v[...,None,:].repeat((1,)*len(v.shape[:-1])+(nsamples,1)) # (bs,n,c) -> (bs,n,1,c) -> (bs,n,ns,c)
+        expanded_v = expanded_v.reshape(*X_lift.shape[:-1],v.shape[-1]) # (bs,n,ns,c) -> (bs,n*ns,c)
+        expanded_mask = m[...,None].repeat((1,)*len(v.shape[:-1])+(nsamples,)) # (bs,n) -> (bs,n,ns)
+        expanded_mask = expanded_mask.reshape(*X_lift.shape[:-1]) # (bs,n,ns) -> (bs,n*ns)
+        return (X_pairs, expanded_v, expanded_mask)
 
 ## Lie Groups acting on R3
 
