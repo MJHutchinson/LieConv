@@ -4,8 +4,9 @@ from lie_conv.utils import export, Named
 
 
 @export
-def norm(x,dim):
-    return (x**2).sum(dim=dim).sqrt()
+def norm(x, dim):
+    return (x ** 2).sum(dim=dim).sqrt()
+
 
 class LieGroup(object, metaclass=Named):
     """The abstract Lie Group requiring additional implementation of exp,log, and lifted_elems
@@ -22,9 +23,13 @@ class LieGroup(object, metaclass=Named):
         super().__init__()
         self.alpha = alpha
         self.use_pseudo = use_pseudo
-        self.debug_config = {"ensure_thetas_in_range": True, "add_random_offsets": True, "tol": 7e-3} if debug_config is None else debug_config # added this 7e-3 which was the default sitting here before but need 7e-8 for diagnostics in double precision?
+        self.debug_config = (
+            {"ensure_thetas_in_range": True, "add_random_offsets": True, "tol": 7e-3}
+            if debug_config is None
+            else debug_config
+        )  # added this 7e-3 which was the default sitting here before but need 7e-8 for diagnostics in double precision?
         self.nsamples = nsamples
-    
+
     @property  # TODO: rename something more sensible
     def lie_dim(self):
         if self.use_pseudo:
@@ -373,21 +378,31 @@ class SO2(LieGroup):
         R[..., 0, 1] = -sin
         R[..., 1, 0] = sin
         return R
-    def log(self,R):
-        theta = torch.atan2(R[...,1,0]-R[...,0,1],R[...,0,0]+R[...,1,1])[...,None]
 
-        if self.debug_config['ensure_thetas_in_range']:
-            tol = self.debug_config['tol']
-            theta = torch.where(torch.abs(theta + np.pi) < tol, theta + 2*np.pi, theta)            
+    def log(self, R):
+        theta = torch.atan2(R[..., 1, 0] - R[..., 0, 1], R[..., 0, 0] + R[..., 1, 1])[
+            ..., None
+        ]
 
-            assert ((-np.pi + tol < theta)).all(), f'Thetas are not in (-pi, pi]. Error at lower bound: Min is {theta.min()}. Max is {theta.max()}.'
-            assert ((theta <= np.pi + tol)).all(), f'Thetas are not in (-pi, pi]. Error at upper bound: Min is {theta.min()}. Max is {theta.max()}.'
+        if self.debug_config["ensure_thetas_in_range"]:
+            tol = self.debug_config["tol"]
+            theta = torch.where(
+                torch.abs(theta + np.pi) < tol, theta + 2 * np.pi, theta
+            )
+
+            assert (
+                (-np.pi + tol < theta)
+            ).all(), f"Thetas are not in (-pi, pi]. Error at lower bound: Min is {theta.min()}. Max is {theta.max()}."
+            assert (
+                (theta <= np.pi + tol)
+            ).all(), f"Thetas are not in (-pi, pi]. Error at upper bound: Min is {theta.min()}. Max is {theta.max()}."
 
         return theta
-    def components2matrix(self,a): # a: (*,lie_dim)
-        A = torch.zeros(*a.shape[:-1],2,2,device=a.device,dtype=a.dtype)
-        A[...,0,1] = -a[...,0]
-        A[...,1,0] = a[...,0]
+
+    def components2matrix(self, a):  # a: (*,lie_dim)
+        A = torch.zeros(*a.shape[:-1], 2, 2, device=a.device, dtype=a.dtype)
+        A[..., 0, 1] = -a[..., 0]
+        A[..., 1, 0] = a[..., 0]
         return A
 
     def matrix2components(self, A):  # A: (*,rep_dim,rep_dim)
@@ -594,20 +609,31 @@ class SE2(SO2):
         # TODO: correctly handle masking, unnecessary for image data
         d = self.rep_dim
         # Sample stabilizer of the origin
-        #thetas = (torch.rand(*p.shape[:-1],1).to(p.device)*2-1)*np.pi
-        #thetas = torch.randn(nsamples)*2*np.pi - np.pi
-        thetas = torch.linspace(-np.pi,np.pi,nsamples+1, device=pt.device, dtype=pt.dtype)[1:]#.to(pt.device)
-        for _ in pt.shape[:-1]: # uniform on circle, but -pi and pi ar the same
-            thetas=thetas.unsqueeze(0)
-        if self.debug_config['add_random_offsets']:
-            thetas = thetas + torch.rand(*pt.shape[:-1],1, device=pt.device, dtype=pt.dtype)*2*np.pi#.to(pt.device)
-        R = torch.zeros(*pt.shape[:-1],nsamples,d,d, device=pt.device, dtype=pt.dtype)#.to(pt.device)
-        sin,cos = thetas.sin(),thetas.cos()
-        R[...,0,0] = cos
-        R[...,1,1] = cos
-        R[...,0,1] = -sin
-        R[...,1,0] = sin
-        R[...,2,2] = 1
+        # thetas = (torch.rand(*p.shape[:-1],1).to(p.device)*2-1)*np.pi
+        # thetas = torch.randn(nsamples)*2*np.pi - np.pi
+        thetas = torch.linspace(
+            -np.pi, np.pi, nsamples + 1, device=pt.device, dtype=pt.dtype
+        )[
+            1:
+        ]  # .to(pt.device)
+        for _ in pt.shape[:-1]:  # uniform on circle, but -pi and pi ar the same
+            thetas = thetas.unsqueeze(0)
+        if self.debug_config["add_random_offsets"]:
+            thetas = (
+                thetas
+                + torch.rand(*pt.shape[:-1], 1, device=pt.device, dtype=pt.dtype)
+                * 2
+                * np.pi
+            )  # .to(pt.device)
+        R = torch.zeros(
+            *pt.shape[:-1], nsamples, d, d, device=pt.device, dtype=pt.dtype
+        )  # .to(pt.device)
+        sin, cos = thetas.sin(), thetas.cos()
+        R[..., 0, 0] = cos
+        R[..., 1, 1] = cos
+        R[..., 0, 1] = -sin
+        R[..., 1, 0] = sin
+        R[..., 2, 2] = 1
         # Get T(p)
         T = torch.zeros_like(R)
         T[..., 0, 0] = 1
@@ -667,7 +693,6 @@ class SE2(SO2):
         return a.reshape((a.shape[0], -1, a.shape[-1]))
 
 
-
 @export
 class SE2_SZ_implementation(LieGroup):
     lie_dim = 3
@@ -675,7 +700,7 @@ class SE2_SZ_implementation(LieGroup):
     q_dim = 0
 
     def matrixify(self, X, nsamples):
-        angles = 2*np.pi * X[..., [2]] / nsamples
+        angles = 2 * np.pi * X[..., [2]] / nsamples
         cosines = torch.cos(angles)
         sines = torch.sin(angles)
 
@@ -683,33 +708,50 @@ class SE2_SZ_implementation(LieGroup):
         rotations_2 = torch.cat([sines, cosines], dim=2).unsqueeze(2)
         rotations = torch.cat([rotations_1, rotations_2], dim=2)
 
-        X_lift = torch.cat(
-            [rotations, X[..., :2].unsqueeze(3)], dim=3)
-        X_lift = torch.cat(
-            [X_lift, torch.ones_like(X_lift)[:, :, :1, :]], dim=2)
-        X_lift[:, :, [2], :2] = 0.
+        X_lift = torch.cat([rotations, X[..., :2].unsqueeze(3)], dim=3)
+        X_lift = torch.cat([X_lift, torch.ones_like(X_lift)[:, :, :1, :]], dim=2)
+        X_lift[:, :, [2], :2] = 0.0
 
         return X_lift, rotations
 
-    def lift(self,x,nsamples,**kwargs):
+    def lift(self, x, nsamples, **kwargs):
         """assumes p has shape (*,n,2), vals has shape (*,n,c), mask has shape (*,n)
-            returns (a,v) with shapes [(*,n*nsamples,lie_dim),(*,n*nsamples,c)"""
-        p,v,m = x
-        rotations = torch.arange(nsamples, dtype=p.dtype, device=p.device).repeat((*p.shape[:2]))
+        returns (a,v) with shapes [(*,n*nsamples,lie_dim),(*,n*nsamples,c)"""
+        p, v, m = x
+        rotations = torch.arange(nsamples, dtype=p.dtype, device=p.device).repeat(
+            (*p.shape[:2])
+        )
         rotations = rotations.unsqueeze(-1)
-        p_lift = p[...,None,:].repeat((1,)*len(p.shape[:-1])+(nsamples,1))
+        p_lift = p[..., None, :].repeat((1,) * len(p.shape[:-1]) + (nsamples, 1))
         p_lift = p_lift.reshape(p.shape[0], p.shape[1] * nsamples, p.shape[2])
         X_lift = torch.cat([p_lift, rotations], dim=-1)
         X_pairs = X_lift[..., None, :, :] - X_lift[..., :, None, :]
         _, rotations_inverse = self.matrixify(-X_lift, nsamples)
-        rotations_inverse = rotations_inverse.unsqueeze(2).repeat(1, 1, rotations_inverse.shape[1], 1, 1)
-        X_pairs = torch.cat([(rotations_inverse@(X_pairs[..., :2, None])).squeeze(-1), torch.remainder(X_pairs[..., [-1]], nsamples)], dim=-1)
+        rotations_inverse = rotations_inverse.unsqueeze(2).repeat(
+            1, 1, rotations_inverse.shape[1], 1, 1
+        )
+        X_pairs = torch.cat(
+            [
+                (rotations_inverse @ (X_pairs[..., :2, None])).squeeze(-1),
+                torch.remainder(X_pairs[..., [-1]], nsamples),
+            ],
+            dim=-1,
+        )
 
-        expanded_v = v[...,None,:].repeat((1,)*len(v.shape[:-1])+(nsamples,1)) # (bs,n,c) -> (bs,n,1,c) -> (bs,n,ns,c)
-        expanded_v = expanded_v.reshape(*X_lift.shape[:-1],v.shape[-1]) # (bs,n,ns,c) -> (bs,n*ns,c)
-        expanded_mask = m[...,None].repeat((1,)*len(v.shape[:-1])+(nsamples,)) # (bs,n) -> (bs,n,ns)
-        expanded_mask = expanded_mask.reshape(*X_lift.shape[:-1]) # (bs,n,ns) -> (bs,n*ns)
+        expanded_v = v[..., None, :].repeat(
+            (1,) * len(v.shape[:-1]) + (nsamples, 1)
+        )  # (bs,n,c) -> (bs,n,1,c) -> (bs,n,ns,c)
+        expanded_v = expanded_v.reshape(
+            *X_lift.shape[:-1], v.shape[-1]
+        )  # (bs,n,ns,c) -> (bs,n*ns,c)
+        expanded_mask = m[..., None].repeat(
+            (1,) * len(v.shape[:-1]) + (nsamples,)
+        )  # (bs,n) -> (bs,n,ns)
+        expanded_mask = expanded_mask.reshape(
+            *X_lift.shape[:-1]
+        )  # (bs,n,ns) -> (bs,n*ns)
         return (X_pairs, expanded_v, expanded_mask)
+
 
 ## Lie Groups acting on R3
 

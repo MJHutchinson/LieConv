@@ -477,10 +477,10 @@ class SpringDynamics(DynamicsDataset):
                  chunk_len=5, num_particles=6, dataset=None, load_preprocessed=False, save_after_processing=False):
         super().__init__()
         self.num_particles = num_particles
-        if num_particles == 6 and space_dim == 2 and n_systems == 10000: # TODO: fix this later
-            filename = os.path.join(root_dir, f"spring_{space_dim}D_{n_systems}_{('train' if train else 'test')}.pz") # use the old file.
-        else:
-            filename = os.path.join(root_dir, f"spring_{space_dim}D_{n_systems}_particles_{num_particles}_{('train' if train else 'test')}.pz")
+        # if num_particles == 6 and space_dim == 2 and n_systems == 10000: # TODO: fix this later
+        #     filename = os.path.join(root_dir, f"spring_{space_dim}D_{n_systems}_{('train' if train else 'test')}.pz") # use the old file.
+        # else:
+        filename = os.path.join(root_dir, f"spring_{space_dim}D_{n_systems}_particles_{num_particles}_{('train' if train else 'test')}.pz")
         self.space_dim = space_dim
         if not load_preprocessed:
             if os.path.exists(filename) and not regen:
